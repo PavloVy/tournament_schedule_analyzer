@@ -3,8 +3,6 @@ import numpy as np
 from typing import List
 import cv2 , random
 import matplotlib.pyplot as plt
-from pyrr.plane import normal
-from sympy.physics.units import temperature
 
 line_step = 25
 temperature = 0
