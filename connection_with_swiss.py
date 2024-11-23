@@ -3,10 +3,12 @@ import numpy as np
 from typing import List
 import cv2 , random
 import matplotlib.pyplot as plt
+from pyrr.plane import normal
 from sympy.physics.units import temperature
 
 line_step = 25
 temperature = 0
+seeding_temperature = 40
 
 class Team:
     def __init__(self, name: str, power: int):
@@ -213,7 +215,7 @@ class Game_block(ABC):
             out.propagate(team)
 
 
-class Rr(Game_block):
+class RoundRobin(Game_block):
     def __init__(self,size, coord):
         super().__init__(size, coord)
         self.num_games = size*(size-1)/2
@@ -278,17 +280,13 @@ class Seeding_block(Game_block):
         self.temperature = temp
 
     def sort_teams(self):
-        gathered = []
+        teams_with_perceived = []
         for inp in self.inputs:
-            gathered.append(inp.message)
+            teams_with_perceived.append((inp.message,inp.message.power+np.random.randn(1)[0] * self.temperature))
 
-        perceived_power = []
-        for team in gathered:
-            perceived_power.append(team.power)+ np.random.randn(1)[0] * self.temperature
+        sorted_by_perceived = sorted(teams_with_perceived, key= lambda x: x[1], reverse=True)
 
-
-
-        self.standings = seed
+        self.standings = [s[0] for s in sorted_by_perceived]
 
     def make_play(self):
         super().make_play()
@@ -491,10 +489,10 @@ def swiss_olympic(nteams,stages):
 def konukh_net():
     cm = Connection_manager()
     source = Source(12, [100, 200]).pack(cm)
-    round_robinA = Rr(3, [300, 100]).pack(cm)
-    round_robinB = Rr(3, [300, 300]).pack(cm)
-    round_robinC = Rr(3, [300, 500]).pack(cm)
-    round_robinD = Rr(3, [300, 700]).pack(cm)
+    round_robinA = RoundRobin(3, [300, 100]).pack(cm)
+    round_robinB = RoundRobin(3, [300, 300]).pack(cm)
+    round_robinC = RoundRobin(3, [300, 500]).pack(cm)
+    round_robinD = RoundRobin(3, [300, 700]).pack(cm)
 
     crossA1D2 = One_game(coord = [500,100]).pack(cm)
     crossD1A2 = One_game(coord=[500, 200]).pack(cm)
@@ -502,7 +500,7 @@ def konukh_net():
     crossC1B2 = One_game(coord=[500, 300]).pack(cm)
     crossB1C2 = One_game(coord=[500, 400]).pack(cm)
 
-    round_robin_lower = Rr(4,[600, 750]).pack(cm)
+    round_robin_lower = RoundRobin(4, [600, 750]).pack(cm)
 
     s1 = One_game(coord=[700, 400]).pack(cm)
     s2 = One_game(coord=[700, 300]).pack(cm)
@@ -575,30 +573,147 @@ def konukh_net():
     cm.count_games()
     return cm
 
+def seed_powerpool(nteams):
+    cm = Connection_manager()
+
+    source = Source(nteams, [50, 200]).pack(cm)
+
+    seed = Seeding_block(nteams,seeding_temperature,[100,200]).pack(cm)
+    link_lists(source.outputs, seed.inputs)
+
+    powerpool = RoundRobin(4, [300, 100]).pack(cm)
+    normalpool1 = RoundRobin(4, [300, 300]).pack(cm)
+    normalpool2 = RoundRobin(4, [300, 500]).pack(cm)
+    interleaved_inputs = []
+    for np1,np2 in zip(normalpool1.inputs,normalpool2.inputs):
+        interleaved_inputs+=[np1,np2]
+    link_lists(seed.outputs, powerpool.inputs+interleaved_inputs)
+
+    cross1 = One_game(coord =[500,200]).pack(cm)
+    link_lists([powerpool.outputs[2],normalpool1.outputs[0]],cross1.inputs)
+    cross2 = One_game(coord=[500, 300]).pack(cm)
+    link_lists([powerpool.outputs[3] , normalpool2.outputs[0]], cross2.inputs)
+
+    cross3 = One_game(coord=[500, 400]).pack(cm)
+    link_lists([normalpool1.outputs[2], normalpool2.outputs[1]], cross3.inputs)
+
+    cross4 = One_game(coord=[500, 500]).pack(cm)
+    link_lists([normalpool1.outputs[1] , normalpool2.outputs[2]], cross4.inputs)
+
+
+    olympic_top = Olympic_block(4,[700,150]).pack(cm)
+    top_teams = [powerpool.outputs[0],cross1.outputs[0],powerpool.outputs[1],cross2.outputs[0]]
+    link_lists(top_teams, olympic_top.inputs)
+
+    olympic_middle = Olympic_block(4,[700,350]).pack(cm)
+    middle_teams = [cross1.outputs[1],cross2.outputs[1],cross3.outputs[0],cross4.outputs[0]]
+    link_lists(middle_teams, olympic_middle.inputs)
+
+    olympic_bottom = Olympic_block(4,[700,550]).pack(cm)
+    bottom_teams = [cross3.outputs[1],cross4.outputs[1], normalpool1.outputs[3], normalpool2.outputs[3]]
+    link_lists(bottom_teams, olympic_bottom.inputs)
+
+    sink = Final_standing(nteams,[900,200]).pack(cm)
+
+    link_lists(olympic_top.outputs+olympic_middle.outputs+olympic_bottom.outputs, sink.inputs)
+
+    cm.check_everything()
+    cm.count_games()
+
+    return cm
+
+
+def seed_powerpool_teach(nteams):
+    cm = Connection_manager()
+
+    source = Source(nteams, [50, 200]).pack(cm)
+
+    seed = Seeding_block(nteams,seeding_temperature,[100,200]).pack(cm)
+    link_lists(source.outputs, seed.inputs)
+
+    powerpool = RoundRobin(4, [300, 100]).pack(cm)
+    normalpool1 = RoundRobin(4, [300, 300]).pack(cm)
+    normalpool2 = RoundRobin(4, [300, 500]).pack(cm)
+    interleaved_inputs = []
+    for np1,np2 in zip(normalpool1.inputs,normalpool2.inputs):
+        interleaved_inputs+=[np1,np2]
+    link_lists(seed.outputs, powerpool.inputs+interleaved_inputs)
+
+    cross1 = One_game(coord =[500,100]).pack(cm)
+    link_lists([powerpool.outputs[2],normalpool1.outputs[0]],cross1.inputs)
+
+    cross2 = One_game(coord=[500, 200]).pack(cm)
+    link_lists([powerpool.outputs[3] , normalpool2.outputs[0]], cross2.inputs)
+
+    cross3 = One_game(coord=[500,300]).pack(cm)
+    link_lists([powerpool.outputs[0], normalpool1.outputs[1]], cross3.inputs)
+
+    cross4 = One_game(coord=[500, 400]).pack(cm)
+    link_lists([powerpool.outputs[1] , normalpool2.outputs[1]], cross4.inputs)
+
+
+
+
+    olympic_top = Olympic_block(4,[700,150]).pack(cm)
+    top_teams = [cross1.outputs[0],cross2.outputs[0],cross3.outputs[0],cross4.outputs[0]]
+    link_lists(top_teams, olympic_top.inputs)
+
+    olympic_middle = Olympic_block(4,[700,350]).pack(cm)
+    middle_teams = [cross1.outputs[1],cross2.outputs[1],cross3.outputs[1],cross4.outputs[1]]
+    link_lists(middle_teams, olympic_middle.inputs)
+
+    olympic_bottom = Olympic_block(4,[700,550]).pack(cm)
+    bottom_teams = [normalpool1.outputs[2], normalpool2.outputs[3], normalpool1.outputs[3], normalpool2.outputs[2]]
+    link_lists(bottom_teams, olympic_bottom.inputs)
+
+    sink = Final_standing(nteams,[900,200]).pack(cm)
+
+    link_lists(olympic_top.outputs+olympic_middle.outputs+olympic_bottom.outputs, sink.inputs)
+
+    cm.check_everything()
+    cm.count_games()
+
+    return cm
+
 if __name__ == '__main__':
 
     # manager  = swiss(12,5)
-    manager = swiss_hybrid(12,3)
+    # manager = swiss_hybrid(12,3)
     # manager = swiss_olympic(12,2)
-    manager = konukh_net()
+    # manager = konukh_net()
+    manager = seed_powerpool(12)
+    manager = seed_powerpool_teach(12)
 
     manager.represent_sel()
 
-    teams8 = [Team("Team A", 10),
-             Team("Team B", 20),
-             Team("Team C", 30),
-             Team("Team d", 40),
-             Team("Team e", 50),
-             Team("Team f", 60),
-             Team("Team g", 70),
-             Team("Team h", 80)]
+    # teams8 = [Team("Team A", 10),
+    #          Team("Team B", 20),
+    #          Team("Team C", 30),
+    #          Team("Team d", 40),
+    #          Team("Team e", 50),
+    #          Team("Team f", 60),
+    #          Team("Team g", 70),
+    #          Team("Team h", 80)]
+    #
+    # teams12 = teams8 + [Team("Team i", 90),
+    #          Team("Team j", 100),
+    #          Team("Team k", 110),
+    #          Team("Team l", 120)]
 
-    teams12 = teams8 + [Team("Team i", 90),
-             Team("Team j", 100),
-             Team("Team k", 110),
-             Team("Team l", 120)]
+    teams_fact = [Team("Nova", 150),
+                 Team("Gigolo", 120),
+                 Team("NXT", 100),
+                 Team("Madcaps", 90),
+                 Team("NXT2", 80),
+                 Team("Skyforce", 70),
+                  Team("Fireplay", 60),
+                  Team("Wolves", 50),
+                  Team("Nova QU", 40),
+                 Team("Dyki Gamble", 30),
+                  Team("Fusion", 20),
+                 Team("SkyLegacy", 1)]
 
-    teams = teams12
+    teams = teams_fact
 
     t_sorted = sorted(teams, reverse=True, key = lambda x: x.power)
     for i,t in enumerate(t_sorted):
